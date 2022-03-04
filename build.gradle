@@ -48,3 +48,23 @@ jar {
 		rename { "${it}_${project.archivesBaseName}" }
 	}
 }
+
+def env = System.getenv()
+publishing {
+	publications {
+		maven(MavenPublication) {
+			from components.java
+		}
+	}
+	repositories {
+		if (env.containsKey("MAVEN_URL")) {
+			maven {
+				url = uri(System.getenv("MAVEN_URL"))
+				credentials {
+					username = System.getenv("MAVEN_USERNAME")
+					password = System.getenv("MAVEN_PASSWORD")
+				}
+			}
+		}
+	}
+}
