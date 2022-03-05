@@ -5,6 +5,9 @@ import dev.gegy.mdchat.parser.ColoredChatExtension;
 import dev.gegy.mdchat.parser.FormattedNode;
 import dev.gegy.mdchat.parser.SpoilerExtension;
 import dev.gegy.mdchat.parser.SpoilerNode;
+import net.fabricmc.fabric.api.event.Event;
+import net.fabricmc.fabric.api.event.EventFactory;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.text.*;
 import net.minecraft.util.Formatting;
 import org.commonmark.ext.autolink.AutolinkExtension;
@@ -18,21 +21,51 @@ import org.jetbrains.annotations.Nullable;
 import java.util.Collections;
 
 public final class TextStyler {
-    public static final TextStyler INSTANCE = new TextStyler();
+    public static final TextStyler INSTANCE = ofGlobal();
 
     private static final Style SPOILER = Style.EMPTY.withFormatting(Formatting.DARK_GRAY, Formatting.OBFUSCATED);
 
-    private static final Parser PARSER = Parser.builder()
-            .enabledBlockTypes(Collections.emptySet())
-            .extensions(Lists.newArrayList(
-                    ColoredChatExtension.INSTANCE,
-                    SpoilerExtension.INSTANCE,
-                    AutolinkExtension.create(),
-                    StrikethroughExtension.create()
-            ))
-            .build();
+    private final Parser PARSER;
+    private final Event<NodeStyler> STYLER;
 
-    private TextStyler() {
+    private TextStyler(Parser parser, Event<NodeStyler> styler) {
+        this.PARSER = parser;
+        this.STYLER = styler;
+    }
+
+    /**
+     * Creates a new TextStyler based off of globally-invoked bootstraps.
+     *
+     * @return A global-like TextStyler.
+     */
+    // TODO: Consider either passing in builders or a bootstrap?
+    public static TextStyler ofGlobal() {
+        Parser.Builder parserBuilder = Parser.builder()
+                .enabledBlockTypes(Collections.emptySet())
+                .extensions(Lists.newArrayList(
+                        ColoredChatExtension.INSTANCE,
+                        SpoilerExtension.INSTANCE,
+                        AutolinkExtension.create(),
+                        StrikethroughExtension.create()
+                ));
+        Event<NodeStyler> eventBus = EventFactory.createArrayBacked(NodeStyler.class, NodeStyler.EVENT_INVOKER);
+        // We're using FabricLoader's entrypoint system here as it isn't possible to
+        // determine when we'll be bootstrapped as any mod can load this class at any time.
+        for (var bootstrap : FabricLoader.getInstance().getEntrypoints("markdown-chat", StylerBootstrap.class)) {
+            bootstrap.bootstrap(parserBuilder, eventBus);
+        }
+        return new TextStyler(parserBuilder.build(), eventBus);
+    }
+
+    /**
+     * Creates a new TextStyler using the provided parser and event bus.
+     *
+     * @param parser The completed parser to use.
+     * @param styler The completed styler to use.
+     * @return A TextStyler tuned to the needs of the input.
+     */
+    public static TextStyler ofLocal(Parser parser, Event<NodeStyler> styler) {
+        return new TextStyler(parser, styler);
     }
 
     @Nullable
@@ -43,6 +76,14 @@ public final class TextStyler {
 
     @Nullable
     private MutableText renderAsText(Node node) {
+        // FIXME: Perhaps should be a lazy supplier?
+        MutableText text = STYLER.invoker().style(node, () -> renderChildren(node));
+        if (text != null) {
+            return text;
+        }
+
+        // TODO: Consider perhaps making this its own invocation,
+        //  or just leave as is for fallbacks?
         if (node instanceof Text) {
             return this.renderLiteral((Text) node);
         } else if (node instanceof Code) {
